@@ -33,7 +33,17 @@ export default function GlobalVoiceButton({ currentForm, onFieldsExtracted }: Gl
       const { data, error } = await supabase.functions.invoke('parse-voice-fields', {
         body: { transcript, currentForm },
       });
-      if (error) throw error;
+      if (error) {
+        // Extract actual error message from edge function response
+        let msg = error.message || 'Erreur inconnue';
+        try {
+          const body = typeof error.context?.json === 'function'
+            ? await error.context.json()
+            : null;
+          if (body?.error) msg = body.error;
+        } catch {}
+        throw new Error(msg);
+      }
       const fields = data?.fields || {};
       const fieldCount = Object.keys(fields).length;
       if (fieldCount > 0) {
@@ -46,7 +56,7 @@ export default function GlobalVoiceButton({ currentForm, onFieldsExtracted }: Gl
       }
     } catch (err: any) {
       console.error('Voice AI error:', err);
-      toast.error("Erreur lors de l'analyse vocale");
+      toast.error(err?.message || "Erreur lors de l'analyse vocale");
     } finally {
       setProcessing(false);
     }

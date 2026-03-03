@@ -1,12 +1,9 @@
-import "https://deno.land/x/xhr@0.1.0/mod.ts";
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-serve(async (req) => {
+Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
@@ -14,8 +11,7 @@ serve(async (req) => {
     if (!transcript) throw new Error("No transcript provided");
 
     const apiKey = Deno.env.get("MISTRAL_API_KEY") || Deno.env.get("AI_API_KEY");
-    const aiEndpoint = "https://api.mistral.ai/v1/chat/completions";
-    if (!apiKey) throw new Error("MISTRAL_API_KEY not configured — ajoutez-la dans les secrets Supabase");
+    if (!apiKey) throw new Error("MISTRAL_API_KEY not configured");
 
     const systemPrompt = `Tu es un assistant médical intelligent pour un registre du cancer au CHU Tlemcen, Algérie.
 L'utilisateur dicte des informations sur un patient atteint de cancer. Tu dois extraire les champs pertinents depuis la transcription vocale.
@@ -56,7 +52,7 @@ Champs déjà remplis : ${JSON.stringify(currentForm || {})}
 
 Extrais les champs et retourne uniquement le JSON.`;
 
-    const response = await fetch(aiEndpoint, {
+    const response = await fetch("https://api.mistral.ai/v1/chat/completions", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
@@ -75,14 +71,15 @@ Extrais les champs et retourne uniquement le JSON.`;
     });
 
     if (!response.ok) {
-      const err = await response.text();
-      throw new Error(`AI service error: ${err}`);
+      const errText = await response.text();
+      console.error("Mistral API error:", response.status, errText);
+      throw new Error(`Mistral API ${response.status}: ${errText.slice(0, 200)}`);
     }
 
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content || "{}";
     
-    // Extract JSON from response (might be wrapped in ```json ... ```)
+    // Extract JSON from response
     const jsonMatch = content.match(/\{[\s\S]*\}/);
     const fields = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
 
@@ -90,6 +87,7 @@ Extrais les champs et retourne uniquement le JSON.`;
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {
+    console.error("parse-voice-fields error:", error);
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
