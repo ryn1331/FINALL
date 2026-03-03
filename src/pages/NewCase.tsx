@@ -95,6 +95,7 @@ export default function NewCase() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [duplicateWarning, setDuplicateWarning] = useState(false);
+  const [duplicatePatient, setDuplicatePatient] = useState<{id: string; nom: string; prenom: string; date_naissance: string | null; code_patient: string} | null>(null);
   const [currentStep, setCurrentStep] = useState(0);
   const [topoSearch, setTopoSearch] = useState('');
   const [morphoSearch, setMorphoSearch] = useState('');
@@ -205,10 +206,24 @@ export default function NewCase() {
   const warningCount = validationErrors.filter(e => e.severity === 'warning').length;
 
   const checkDuplicate = async () => {
-    if (!form.nom || !form.prenom || !form.dateNaissance) return;
-    const { data } = await supabase.from('patients').select('id')
-      .ilike('nom', form.nom).ilike('prenom', form.prenom).eq('date_naissance', form.dateNaissance);
-    setDuplicateWarning(!!data && data.length > 0);
+    if (!form.nom.trim() || !form.prenom.trim()) {
+      setDuplicateWarning(false);
+      setDuplicatePatient(null);
+      return;
+    }
+    let query = supabase.from('patients').select('id, nom, prenom, date_naissance, code_patient')
+      .ilike('nom', form.nom.trim()).ilike('prenom', form.prenom.trim());
+    if (form.dateNaissance) {
+      query = query.eq('date_naissance', form.dateNaissance);
+    }
+    const { data } = await query.limit(1);
+    if (data && data.length > 0) {
+      setDuplicateWarning(true);
+      setDuplicatePatient(data[0]);
+    } else {
+      setDuplicateWarning(false);
+      setDuplicatePatient(null);
+    }
   };
 
   const filteredTopo = topoSearch.length >= 1
@@ -227,6 +242,25 @@ export default function NewCase() {
       return;
     }
 
+    // Re-check duplicate before submit
+    if (!duplicateWarning) {
+      let q = supabase.from('patients').select('id')
+        .ilike('nom', form.nom.trim()).ilike('prenom', form.prenom.trim());
+      if (form.dateNaissance) q = q.eq('date_naissance', form.dateNaissance);
+      const { data: dup } = await q.limit(1);
+      if (dup && dup.length > 0) {
+        setDuplicateWarning(true);
+        toast.error('⚠️ Un patient avec ce nom/prénom existe déjà. Doublon interdit.');
+        setCurrentStep(0);
+        return;
+      }
+    }
+    if (duplicateWarning) {
+      toast.error('⚠️ Doublon détecté — Impossible d\'enregistrer. Modifiez le nom/prénom ou vérifiez le dossier existant.');
+      setCurrentStep(0);
+      return;
+    }
+
     setLoading(true);
     try {
       const code = form.numDossier || `P-${Date.now().toString(36).toUpperCase()}`;
@@ -236,7 +270,17 @@ export default function NewCase() {
         commune: form.commune || null, telephone: form.telephone || null,
         num_dossier: form.numDossier || null, wilaya: form.wilaya || 'Tlemcen', created_by: user.id,
       }).select().single();
-      if (patientErr) throw patientErr;
+      if (patientErr) {
+        // Handle DB unique constraint violation
+        if (patientErr.code === '23505') {
+          setDuplicateWarning(true);
+          toast.error('⚠️ Ce patient existe déjà dans la base de données (doublon détecté).');
+          setCurrentStep(0);
+          setLoading(false);
+          return;
+        }
+        throw patientErr;
+      }
 
       const tabagismeVal = form.tabagisme === 'oui' && form.tabagismeAnnees
         ? `Oui (${form.tabagismeAnnees} ans)` : form.tabagisme;
@@ -358,9 +402,28 @@ export default function NewCase() {
 
         {/* Duplicate warning */}
         {duplicateWarning && (
-          <div className="flex items-center gap-2 p-3 rounded-xl bg-warning/10 border border-warning/30 text-warning mb-4">
-            <AlertTriangle size={16} />
-            <span className="text-xs font-medium">Doublon suspect — Un patient similaire existe déjà.</span>
+          <div className="p-3 rounded-xl bg-destructive/10 border border-destructive/30 text-destructive mb-4 space-y-2">
+            <div className="flex items-center gap-2">
+              <XCircle size={16} />
+              <span className="text-xs font-bold">⛔ Doublon détecté — Enregistrement bloqué</span>
+            </div>
+            {duplicatePatient && (
+              <div className="text-xs bg-background/60 rounded-lg p-2 space-y-0.5">
+                <p><span className="font-semibold">Patient existant :</span> {duplicatePatient.nom} {duplicatePatient.prenom}</p>
+                {duplicatePatient.date_naissance && <p><span className="font-semibold">Né(e) le :</span> {new Date(duplicatePatient.date_naissance).toLocaleDateString('fr-FR')}</p>}
+                <p><span className="font-semibold">Code :</span> {duplicatePatient.code_patient}</p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="mt-1.5 h-7 text-xs gap-1"
+                  onClick={() => navigate(`/patient/${duplicatePatient.id}`)}
+                >
+                  <ArrowRight size={12} /> Ouvrir le dossier existant
+                </Button>
+              </div>
+            )}
+            <p className="text-[10px] text-muted-foreground">Modifiez le nom ou prénom si ce n'est pas le même patient.</p>
           </div>
         )}
 
