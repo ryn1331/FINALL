@@ -46,12 +46,13 @@ const FEMALE_ONLY_SITES = ['C51', 'C52', 'C53', 'C54', 'C55', 'C56', 'C57', 'C58
 export function validateCase(data: CaseData): ValidationError[] {
   const errors: ValidationError[] = [];
 
-  // Rule 1: Required fields
+  // Rule 1: Required fields (only nom + prenom are truly blocking)
   if (!data.nom?.trim()) errors.push({ field: 'nom', rule: 'required', severity: 'error', message: 'Le nom est obligatoire' });
   if (!data.prenom?.trim()) errors.push({ field: 'prenom', rule: 'required', severity: 'error', message: 'Le prénom est obligatoire' });
-  if (!data.sexe) errors.push({ field: 'sexe', rule: 'required', severity: 'error', message: 'Le sexe est obligatoire' });
-  if (!data.dateDiagnostic) errors.push({ field: 'dateDiagnostic', rule: 'required', severity: 'error', message: 'La date de diagnostic est obligatoire' });
-  if (!data.typeCancer) errors.push({ field: 'typeCancer', rule: 'required', severity: 'error', message: 'Le type de cancer est obligatoire' });
+  // These are recommended but not blocking
+  if (!data.sexe) errors.push({ field: 'sexe', rule: 'recommended', severity: 'warning', message: 'Le sexe est recommandé' });
+  if (!data.dateDiagnostic) errors.push({ field: 'dateDiagnostic', rule: 'recommended', severity: 'warning', message: 'La date de diagnostic est recommandée' });
+  if (!data.typeCancer) errors.push({ field: 'typeCancer', rule: 'recommended', severity: 'warning', message: 'Le type de cancer est recommandé' });
 
   // Rule 2: Date coherence - diagnostic date vs birth date (max 120 years)
   if (data.dateNaissance && data.dateDiagnostic) {

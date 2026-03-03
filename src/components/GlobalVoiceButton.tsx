@@ -89,14 +89,37 @@ export default function GlobalVoiceButton({ currentForm, onFieldsExtracted }: Gl
       setInterim(interimText || finalText.trim());
     };
 
-    recognition.onerror = () => stopListening();
+    recognition.onerror = (e: any) => {
+      console.warn('SpeechRecognition error:', e?.error);
+      // Don't stop on 'no-speech' or 'aborted' — just let onend handle restart
+      if (e?.error === 'no-speech' || e?.error === 'aborted') return;
+      const rec = recognitionRef.current;
+      recognitionRef.current = null;
+      if (rec) try { rec.stop(); } catch {}
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+      setListening(false);
+      setElapsed(0);
+      const text = fullTranscriptRef.current.trim();
+      setInterim('');
+      fullTranscriptRef.current = '';
+      if (text) processTranscript(text);
+    };
 
     recognition.onend = () => {
-      if (recognitionRef.current === recognition && listening) {
+      // Auto-restart as long as recognitionRef still points to this instance
+      // (stopListening nullifies recognitionRef before calling stop)
+      if (recognitionRef.current === recognition) {
         try { recognition.start(); } catch {}
         return;
       }
-      finalize();
+      // Otherwise finalize
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+      setListening(false);
+      setElapsed(0);
+      const text = fullTranscriptRef.current.trim();
+      setInterim('');
+      fullTranscriptRef.current = '';
+      if (text) processTranscript(text);
     };
 
     recognitionRef.current = recognition;
@@ -104,26 +127,27 @@ export default function GlobalVoiceButton({ currentForm, onFieldsExtracted }: Gl
 
     // Auto-stop after 2 minutes
     setTimeout(() => {
-      if (recognitionRef.current === recognition) stopListening();
+      if (recognitionRef.current === recognition) {
+        const rec = recognitionRef.current;
+        recognitionRef.current = null;
+        if (rec) try { rec.stop(); } catch {}
+        if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+        setListening(false);
+        setElapsed(0);
+        const text = fullTranscriptRef.current.trim();
+        setInterim('');
+        fullTranscriptRef.current = '';
+        if (text) processTranscript(text);
+      }
     }, 120000);
-  }, []);
-
-  const finalize = useCallback(() => {
-    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-    setListening(false);
-    setElapsed(0);
-    const text = fullTranscriptRef.current.trim();
-    setInterim('');
-    fullTranscriptRef.current = '';
-    if (text) processTranscript(text);
   }, [processTranscript]);
 
   const stopListening = useCallback(() => {
     const rec = recognitionRef.current;
-    recognitionRef.current = null;
+    recognitionRef.current = null; // this prevents auto-restart in onend
     if (rec) try { rec.stop(); } catch {}
-    finalize();
-  }, [finalize]);
+    // onend will fire and call finalize since recognitionRef is now null
+  }, []);
 
   const formatTime = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
 

@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
@@ -14,7 +14,7 @@ import {
   Loader2, AlertTriangle, User, Stethoscope, FlaskConical, HeartPulse,
   FileText, MapPin, Microscope, Activity, Shield, Search, CheckCircle2, XCircle, FolderOpen,
   ChevronLeft, ChevronRight, Save, ArrowRight, Scan, Film, Radio, Image,
-  FileSpreadsheet, FileCheck, Camera, ShieldCheck, ClipboardList,
+  FileSpreadsheet, FileCheck, Camera, ShieldCheck, ClipboardList, Upload, X, Plus,
 } from 'lucide-react';
 import GlobalVoiceButton from '@/components/GlobalVoiceButton';
 import PatientFileUpload from '@/components/PatientFileUpload';
@@ -73,6 +73,11 @@ const STEPS = [
   { id: 'documents', label: 'Documents', shortLabel: 'Docs', icon: FolderOpen },
 ];
 
+// FieldGroup défini EN DEHORS de NewCase pour éviter le remontage à chaque frappe
+function FieldGroup({ children, className }: { children: React.ReactNode; className?: string }) {
+  return <div className={cn('space-y-1.5', className)}>{children}</div>;
+}
+
 export default function NewCase() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -83,6 +88,43 @@ export default function NewCase() {
   const [morphoSearch, setMorphoSearch] = useState('');
   const [savedPatientId, setSavedPatientId] = useState<string | null>(null);
   const [savedCaseId, setSavedCaseId] = useState<string | null>(null);
+
+  // Pending documents (before patient is saved)
+  const [pendingDocs, setPendingDocs] = useState<Array<{ file: File; docType: string }>>([]);
+  const docInputRef = useRef<HTMLInputElement>(null);
+  const [docTypeForUpload, setDocTypeForUpload] = useState('');
+
+  const addPendingFiles = useCallback((fileList: FileList | File[], docType: string) => {
+    const arr = Array.from(fileList);
+    const newDocs = arr.filter(f => f.size <= 20 * 1024 * 1024).map(f => ({ file: f, docType }));
+    const oversized = arr.filter(f => f.size > 20 * 1024 * 1024);
+    if (oversized.length) toast.error(`${oversized.length} fichier(s) > 20 MB ignoré(s)`);
+    setPendingDocs(prev => [...prev, ...newDocs]);
+  }, []);
+
+  const removePendingDoc = useCallback((index: number) => {
+    setPendingDocs(prev => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const uploadPendingDocs = useCallback(async (patientId: string, caseId: string | null) => {
+    if (pendingDocs.length === 0 || !user) return;
+    let count = 0;
+    for (const { file, docType } of pendingDocs) {
+      const storagePath = `${patientId}/${docType}/${Date.now()}_${file.name}`;
+      const { error: upErr } = await supabase.storage.from('patient-files').upload(storagePath, file);
+      if (upErr) { toast.error(`Erreur upload ${file.name}`); continue; }
+      const { error: dbErr } = await supabase.from('patient_files').insert({
+        patient_id: patientId, case_id: caseId || null,
+        file_name: file.name, file_path: storagePath,
+        file_type: docType, file_size: file.size,
+        mime_type: file.type, uploaded_by: user.id,
+      });
+      if (dbErr) toast.error(`Erreur DB ${file.name}`);
+      else count++;
+    }
+    if (count > 0) toast.success(`${count} document(s) uploadé(s)`);
+    setPendingDocs([]);
+  }, [pendingDocs, user]);
 
   const [form, setForm] = useState({
     nom: '', prenom: '', dateNaissance: '', sexe: '', telephone: '', numDossier: '',
@@ -147,9 +189,9 @@ export default function NewCase() {
 
   const handleSubmit = async () => {
     if (!user) return;
-    const criticalErrors = validationErrors.filter(e => e.severity === 'error');
-    if (criticalErrors.length > 0) {
-      toast.error(`${criticalErrors.length} erreur(s) de validation à corriger`);
+    // Only nom and prenom are truly required to save
+    if (!form.nom.trim() || !form.prenom.trim()) {
+      toast.error('Le nom et prénom du patient sont obligatoires');
       return;
     }
 
@@ -158,8 +200,8 @@ export default function NewCase() {
       const code = form.numDossier || `P-${Date.now().toString(36).toUpperCase()}`;
       const { data: patient, error: patientErr } = await supabase.from('patients').insert({
         code_patient: code, nom: form.nom, prenom: form.prenom,
-        date_naissance: form.dateNaissance || null, sexe: form.sexe,
-        commune: form.commune, telephone: form.telephone || null,
+        date_naissance: form.dateNaissance || null, sexe: form.sexe || null,
+        commune: form.commune || null, telephone: form.telephone || null,
         num_dossier: form.numDossier || null, wilaya: form.wilaya || 'Tlemcen', created_by: user.id,
       }).select().single();
       if (patientErr) throw patientErr;
@@ -168,7 +210,7 @@ export default function NewCase() {
         ? `Oui (${form.tabagismeAnnees} ans)` : form.tabagisme;
 
       const { data: caseData, error: caseErr } = await supabase.from('cancer_cases').insert({
-        patient_id: patient.id, type_cancer: form.typeCancer,
+        patient_id: patient.id, type_cancer: form.typeCancer || null,
         sous_type_cancer: form.sousTypeCancer || null, code_icdo: form.codeIcdo || null,
         topographie_icdo: form.topographieIcdo || null, morphologie_icdo: form.morphologieIcdo || null,
         comportement: form.comportement || null, grade: form.grade || null,
@@ -176,7 +218,7 @@ export default function NewCase() {
         milieu: form.milieu, profession: form.profession || null,
         base_diagnostic: form.baseDiagnostic || null, source_info: form.sourceInfo || null,
         stade_tnm: form.stadeTnm || null, anomalies_moleculaires: form.anomaliesMoleculaires || null,
-        date_diagnostic: form.dateDiagnostic, medecin_anapath: form.medecinAnapath || null,
+        date_diagnostic: form.dateDiagnostic || null, medecin_anapath: form.medecinAnapath || null,
         date_anapath: form.dateAnapath || null, ref_anapath: form.refAnapath || null,
         resultat_anapath: form.resultatAnapath || null, biologie_fns: form.biologieFns || null,
         biologie_globules: form.biologieGlobules || null, biologie_date: form.biologieDate || null,
@@ -190,7 +232,13 @@ export default function NewCase() {
 
       setSavedPatientId(patient.id);
       setSavedCaseId(caseData?.id || null);
-      toast.success('✅ Cas enregistré — Ajoutez des documents');
+
+      // Auto-upload pending documents
+      if (pendingDocs.length > 0) {
+        await uploadPendingDocs(patient.id, caseData?.id || null);
+      }
+
+      toast.success('✅ Cas enregistré');
       setCurrentStep(8); // Documents step
     } catch (err: any) {
       toast.error(err.message || "Erreur lors de l'enregistrement");
@@ -202,10 +250,6 @@ export default function NewCase() {
   const stepId = STEPS[currentStep].id;
   const isLastFormStep = currentStep === 7; // suivi
   const isDocStep = currentStep === 8;
-
-  const FieldGroup = ({ children, className }: { children: React.ReactNode; className?: string }) => (
-    <div className={cn('space-y-1.5', className)}>{children}</div>
-  );
 
   return (
     <AppLayout>
@@ -223,17 +267,7 @@ export default function NewCase() {
               Étape {currentStep + 1}/{STEPS.length} — {STEPS[currentStep].label}
             </span>
             <div className="flex items-center gap-1.5">
-              {errorCount > 0 && form.nom && (
-                <Badge variant="destructive" className="text-[10px] h-5 gap-0.5">
-                  <XCircle size={10} /> {errorCount}
-                </Badge>
-              )}
-              {warningCount > 0 && form.nom && (
-                <Badge className="bg-warning/10 text-warning border-warning/20 text-[10px] h-5 gap-0.5">
-                  <AlertTriangle size={10} /> {warningCount}
-                </Badge>
-              )}
-              {errorCount === 0 && warningCount === 0 && form.nom && (
+              {errorCount === 0 && form.nom && form.prenom && (
                 <Badge className="bg-success/10 text-success border-success/20 text-[10px] h-5 gap-0.5">
                   <CheckCircle2 size={10} /> OK
                 </Badge>
@@ -589,27 +623,108 @@ export default function NewCase() {
                   <PatientFileUpload patientId={savedPatientId} caseId={savedCaseId || undefined} />
                 ) : (
                   <div className="space-y-4">
-                    <div className="text-center py-4 px-3 rounded-xl bg-muted/50 border border-border/40">
-                      <AlertTriangle size={28} className="mx-auto mb-2 text-amber-500" />
-                      <p className="text-sm font-semibold">Enregistrez d'abord le cas</p>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Vous pourrez ensuite uploader tous les documents ci-dessous
-                      </p>
+                    <p className="text-xs text-muted-foreground">
+                      Sélectionnez le type puis ajoutez vos fichiers. Ils seront uploadés à l'enregistrement du cas.
+                    </p>
+
+                    {/* Type selector + file input */}
+                    <div className="flex gap-2 items-end">
+                      <div className="flex-1">
+                        <Label className="text-xs mb-1 block">Type de document</Label>
+                        <Select value={docTypeForUpload} onValueChange={setDocTypeForUpload}>
+                          <SelectTrigger className="h-9 text-xs">
+                            <SelectValue placeholder="Choisir le type" />
+                          </SelectTrigger>
+                          <SelectContent className="max-h-60">
+                            {DOC_TYPES_PREVIEW.map(t => (
+                              <SelectItem key={t.value} value={t.value}>
+                                <span className="flex items-center gap-2">
+                                  <t.icon size={14} className={t.color.split(' ')[0]} />
+                                  {t.label}
+                                </span>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <input
+                        ref={docInputRef}
+                        type="file"
+                        multiple
+                        className="hidden"
+                        onChange={e => {
+                          if (e.target.files && docTypeForUpload) {
+                            addPendingFiles(e.target.files, docTypeForUpload);
+                            e.target.value = '';
+                          } else if (!docTypeForUpload) {
+                            toast.error('Choisissez d\'abord le type de document');
+                          }
+                        }}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-9 gap-1.5"
+                        onClick={() => {
+                          if (!docTypeForUpload) { toast.error('Choisissez d\'abord le type'); return; }
+                          docInputRef.current?.click();
+                        }}
+                      >
+                        <Plus size={14} /> Ajouter
+                      </Button>
                     </div>
-                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Types de documents supportés</p>
-                    <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
-                      {DOC_TYPES_PREVIEW.map(t => (
-                        <div
-                          key={t.value}
-                          className="flex flex-col items-center gap-1.5 p-3 rounded-xl border border-border/40 opacity-60 text-center"
-                        >
-                          <div className={cn('w-10 h-10 rounded-lg flex items-center justify-center', t.color)}>
-                            <t.icon size={18} />
-                          </div>
-                          <span className="text-[11px] font-medium leading-tight">{t.label}</span>
+
+                    {/* Pending files list */}
+                    {pendingDocs.length > 0 && (
+                      <div className="space-y-1.5">
+                        <p className="text-xs font-semibold text-muted-foreground">
+                          {pendingDocs.length} fichier(s) prêt(s) à uploader
+                        </p>
+                        {pendingDocs.map((doc, i) => {
+                          const cat = DOC_TYPES_PREVIEW.find(t => t.value === doc.docType) || DOC_TYPES_PREVIEW[DOC_TYPES_PREVIEW.length - 1];
+                          return (
+                            <div key={i} className="flex items-center gap-2 p-2 rounded-lg bg-muted/40 border border-border/30">
+                              <div className={cn('w-7 h-7 rounded flex items-center justify-center shrink-0', cat.color)}>
+                                <cat.icon size={14} />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-medium truncate">{doc.file.name}</p>
+                                <p className="text-[10px] text-muted-foreground">{cat.label} · {(doc.file.size / 1024).toFixed(0)} KB</p>
+                              </div>
+                              <button type="button" onClick={() => removePendingDoc(i)} className="text-muted-foreground hover:text-destructive transition-colors p-1">
+                                <X size={14} />
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Document types grid */}
+                    {pendingDocs.length === 0 && (
+                      <>
+                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mt-2">Types supportés</p>
+                        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
+                          {DOC_TYPES_PREVIEW.map(t => (
+                            <button
+                              key={t.value}
+                              type="button"
+                              onClick={() => { setDocTypeForUpload(t.value); setTimeout(() => docInputRef.current?.click(), 100); }}
+                              className={cn(
+                                'flex flex-col items-center gap-1.5 p-3 rounded-xl border border-border/40 text-center transition-all hover:border-primary/40 hover:bg-primary/5',
+                                docTypeForUpload === t.value && 'border-primary bg-primary/5'
+                              )}
+                            >
+                              <div className={cn('w-10 h-10 rounded-lg flex items-center justify-center', t.color)}>
+                                <t.icon size={18} />
+                              </div>
+                              <span className="text-[11px] font-medium leading-tight">{t.label}</span>
+                            </button>
+                          ))}
                         </div>
-                      ))}
-                    </div>
+                      </>
+                    )}
                   </div>
                 )}
               </>
@@ -645,12 +760,13 @@ export default function NewCase() {
           ) : isLastFormStep || isDocStep ? (
             <Button
               onClick={handleSubmit}
-              disabled={loading || errorCount > 0 || !!savedPatientId}
+              disabled={loading || !!savedPatientId}
               className="h-10 px-6"
             >
               {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {savedPatientId ? '✅ Enregistré' : <>
                 <Save size={16} className="mr-1" /> Enregistrer
+                {pendingDocs.length > 0 && <Badge variant="secondary" className="ml-1.5 text-[10px] h-4 px-1.5">{pendingDocs.length} doc(s)</Badge>}
               </>}
             </Button>
           ) : (

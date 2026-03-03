@@ -13,9 +13,9 @@ serve(async (req) => {
     const { transcript, currentForm } = await req.json();
     if (!transcript) throw new Error("No transcript provided");
 
-    const apiKey = Deno.env.get("AI_API_KEY");
-    const aiEndpoint = Deno.env.get("AI_CHAT_COMPLETIONS_URL") || "https://api.openai.com/v1/chat/completions";
-    if (!apiKey) throw new Error("AI_API_KEY not configured");
+    const apiKey = Deno.env.get("MISTRAL_API_KEY") || Deno.env.get("AI_API_KEY");
+    const aiEndpoint = "https://api.mistral.ai/v1/chat/completions";
+    if (!apiKey) throw new Error("MISTRAL_API_KEY not configured — ajoutez-la dans les secrets Supabase");
 
     const systemPrompt = `Tu es un assistant médical intelligent pour un registre du cancer au CHU Tlemcen, Algérie.
 L'utilisateur dicte des informations sur un patient atteint de cancer. Tu dois extraire les champs pertinents depuis la transcription vocale.
@@ -63,13 +63,14 @@ Extrais les champs et retourne uniquement le JSON.`;
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
+        model: "mistral-large-latest",
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userMessage },
         ],
         temperature: 0.1,
         max_tokens: 1000,
+        response_format: { type: "json_object" },
       }),
     });
 

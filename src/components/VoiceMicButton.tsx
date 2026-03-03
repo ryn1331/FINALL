@@ -78,17 +78,34 @@ export default function VoiceMicButton({
       setInterim(interimText || finalText.trim());
     };
 
-    recognition.onerror = () => {
-      stopListening();
+    recognition.onerror = (e: any) => {
+      console.warn('SpeechRecognition error:', e?.error);
+      if (e?.error === 'no-speech' || e?.error === 'aborted') return;
+      const rec = recognitionRef.current;
+      recognitionRef.current = null;
+      if (rec) try { rec.stop(); } catch {}
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+      setListening(false);
+      setElapsed(0);
+      const text = fullTranscriptRef.current.trim();
+      if (text) onTranscript(text);
+      setInterim('');
+      fullTranscriptRef.current = '';
     };
 
     recognition.onend = () => {
-      // In continuous mode, auto-restart if still supposed to be listening
-      if (continuous && recognitionRef.current === recognition && listening) {
+      // In continuous mode, auto-restart if recognitionRef still points here
+      if (continuous && recognitionRef.current === recognition) {
         try { recognition.start(); } catch {}
         return;
       }
-      finalize();
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+      setListening(false);
+      setElapsed(0);
+      const text = fullTranscriptRef.current.trim();
+      if (text) onTranscript(text);
+      setInterim('');
+      fullTranscriptRef.current = '';
     };
 
     recognitionRef.current = recognition;
@@ -98,31 +115,18 @@ export default function VoiceMicButton({
     const timeout = continuous ? 60000 : 15000;
     setTimeout(() => {
       if (recognitionRef.current === recognition) {
-        stopListening();
+        recognitionRef.current = null;
+        try { recognition.stop(); } catch {}
       }
     }, timeout);
   }, [onTranscript, continuous]);
 
-  const finalize = useCallback(() => {
-    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-    setListening(false);
-    setElapsed(0);
-    const text = fullTranscriptRef.current.trim();
-    if (text) {
-      onTranscript(text);
-    }
-    setInterim('');
-    fullTranscriptRef.current = '';
-  }, [onTranscript]);
-
   const stopListening = useCallback(() => {
     const rec = recognitionRef.current;
     recognitionRef.current = null; // prevent auto-restart in continuous mode
-    if (rec) {
-      try { rec.stop(); } catch {}
-    }
-    finalize();
-  }, [finalize]);
+    if (rec) try { rec.stop(); } catch {}
+    // onend will fire and handle finalization since recognitionRef is now null
+  }, []);
 
   const isLarge = size === 'lg';
   const formatTime = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
