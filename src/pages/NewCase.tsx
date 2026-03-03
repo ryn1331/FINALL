@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef } from 'react';
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
@@ -14,7 +14,7 @@ import {
   Loader2, AlertTriangle, User, Stethoscope, FlaskConical, HeartPulse,
   FileText, MapPin, Microscope, Activity, Shield, Search, CheckCircle2, XCircle, FolderOpen,
   ChevronLeft, ChevronRight, Save, ArrowRight, Scan, Film, Radio, Image,
-  FileSpreadsheet, FileCheck, Camera, ShieldCheck, ClipboardList, Upload, X, Plus,
+  FileSpreadsheet, FileCheck, Camera, ShieldCheck, ClipboardList, Upload, X, Plus, Settings2,
 } from 'lucide-react';
 import GlobalVoiceButton from '@/components/GlobalVoiceButton';
 import PatientFileUpload from '@/components/PatientFileUpload';
@@ -78,6 +78,18 @@ function FieldGroup({ children, className }: { children: React.ReactNode; classN
   return <div className={cn('space-y-1.5', className)}>{children}</div>;
 }
 
+interface CustomField {
+  id: string;
+  label: string;
+  field_key: string;
+  field_type: string;
+  step_id: string;
+  options: string[] | null;
+  required: boolean;
+  active: boolean;
+  sort_order: number;
+}
+
 export default function NewCase() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -88,6 +100,26 @@ export default function NewCase() {
   const [morphoSearch, setMorphoSearch] = useState('');
   const [savedPatientId, setSavedPatientId] = useState<string | null>(null);
   const [savedCaseId, setSavedCaseId] = useState<string | null>(null);
+
+  // Custom fields from admin
+  const [customFields, setCustomFields] = useState<CustomField[]>([]);
+  const [customFieldValues, setCustomFieldValues] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    const fetchCustomFields = async () => {
+      const { data } = await supabase.from('custom_fields').select('*').eq('active', true).order('sort_order');
+      if (data) setCustomFields(data as CustomField[]);
+    };
+    fetchCustomFields();
+  }, []);
+
+  const updateCustomField = useCallback((fieldKey: string, value: string) => {
+    setCustomFieldValues(prev => ({ ...prev, [fieldKey]: value }));
+  }, []);
+
+  const fieldsForStep = useCallback((stepId: string) => {
+    return customFields.filter(f => f.step_id === stepId);
+  }, [customFields]);
 
   // Pending documents (before patient is saved)
   const [pendingDocs, setPendingDocs] = useState<Array<{ file: File; docType: string }>>([]);
@@ -233,6 +265,21 @@ export default function NewCase() {
       setSavedPatientId(patient.id);
       setSavedCaseId(caseData?.id || null);
 
+      // Save custom field values
+      if (caseData?.id) {
+        const entries = Object.entries(customFieldValues).filter(([, v]) => v.trim());
+        if (entries.length > 0) {
+          const fieldMap: Record<string, string> = {};
+          customFields.forEach(f => { fieldMap[f.field_key] = f.id; });
+          const rows = entries
+            .filter(([key]) => fieldMap[key])
+            .map(([key, value]) => ({ case_id: caseData.id, field_id: fieldMap[key], value }));
+          if (rows.length > 0) {
+            await supabase.from('custom_field_values').upsert(rows, { onConflict: 'case_id,field_id' });
+          }
+        }
+      }
+
       // Auto-upload pending documents
       if (pendingDocs.length > 0) {
         await uploadPendingDocs(patient.id, caseData?.id || null);
@@ -354,6 +401,7 @@ export default function NewCase() {
                     <FieldGroup><Label>Téléphone</Label><Input value={form.telephone} onChange={e => update('telephone', e.target.value)} placeholder="05XX XX XX XX" /></FieldGroup>
                   </div>
                 </div>
+                <CustomFieldsBlock fields={fieldsForStep('identite')} values={customFieldValues} onChange={updateCustomField} />
               </>
             )}
 
@@ -399,6 +447,7 @@ export default function NewCase() {
                   </div>
                   <FieldGroup><Label>Profession</Label><Input value={form.profession} onChange={e => update('profession', e.target.value)} placeholder="Ex: Agriculteur, Enseignant..." /></FieldGroup>
                 </div>
+                <CustomFieldsBlock fields={fieldsForStep('epidemio')} values={customFieldValues} onChange={updateCustomField} />
               </>
             )}
 
@@ -427,6 +476,7 @@ export default function NewCase() {
                   <FieldGroup><Label>Source d'information</Label><Input value={form.sourceInfo} onChange={e => update('sourceInfo', e.target.value)} placeholder="Hôpital, laboratoire..." /></FieldGroup>
                   <FieldGroup><Label>Base du diagnostic</Label><Input value={form.baseDiagnostic} onChange={e => update('baseDiagnostic', e.target.value)} placeholder="Histologie tumeur primitive..." /></FieldGroup>
                 </div>
+                <CustomFieldsBlock fields={fieldsForStep('diagnostic')} values={customFieldValues} onChange={updateCustomField} />
               </>
             )}
 
@@ -463,6 +513,7 @@ export default function NewCase() {
                     </FieldGroup>
                   </div>
                 </div>
+                <CustomFieldsBlock fields={fieldsForStep('topographie')} values={customFieldValues} onChange={updateCustomField} />
               </>
             )}
 
@@ -502,6 +553,7 @@ export default function NewCase() {
                     <FieldGroup><Label>Sous-type histologique</Label><Input value={form.sousTypeCancer} onChange={e => update('sousTypeCancer', e.target.value)} placeholder="Adénocarcinome" /></FieldGroup>
                   </div>
                 </div>
+                <CustomFieldsBlock fields={fieldsForStep('morphologie')} values={customFieldValues} onChange={updateCustomField} />
               </>
             )}
 
@@ -526,6 +578,7 @@ export default function NewCase() {
                   </div>
                   <FieldGroup><Label>Anomalies moléculaires</Label><Input value={form.anomaliesMoleculaires} onChange={e => update('anomaliesMoleculaires', e.target.value)} placeholder="EGFR, ALK, KRAS, HER2, BRCA..." /></FieldGroup>
                 </div>
+                <CustomFieldsBlock fields={fieldsForStep('stade')} values={customFieldValues} onChange={updateCustomField} />
               </>
             )}
 
@@ -550,6 +603,7 @@ export default function NewCase() {
                     </div>
                   </div>
                 </div>
+                <CustomFieldsBlock fields={fieldsForStep('traitement')} values={customFieldValues} onChange={updateCustomField} />
               </>
             )}
 
@@ -612,6 +666,7 @@ export default function NewCase() {
                   <FieldGroup><Label>Symptômes</Label><Textarea value={form.symptomes} onChange={e => update('symptomes', e.target.value)} rows={2} placeholder="Décrire les symptômes..." /></FieldGroup>
                   <FieldGroup><Label>Notes</Label><Textarea value={form.notes} onChange={e => update('notes', e.target.value)} rows={2} placeholder="Notes complémentaires..." /></FieldGroup>
                 </div>
+                <CustomFieldsBlock fields={fieldsForStep('suivi')} values={customFieldValues} onChange={updateCustomField} />
               </>
             )}
 
@@ -792,6 +847,60 @@ function StepHeader({ icon: Icon, title }: { icon: React.ElementType; title: str
         <Icon size={16} className="text-primary" />
       </div>
       <h2 className="font-display font-semibold text-sm">{title}</h2>
+    </div>
+  );
+}
+
+function CustomFieldsBlock({
+  fields,
+  values,
+  onChange,
+}: {
+  fields: CustomField[];
+  values: Record<string, string>;
+  onChange: (key: string, value: string) => void;
+}) {
+  if (fields.length === 0) return null;
+  return (
+    <div className="border-t border-border/30 pt-3 mt-1">
+      <p className="text-xs font-semibold text-muted-foreground mb-2 flex items-center gap-1">
+        <Settings2 size={12} /> Champs personnalisés
+      </p>
+      <div className="grid grid-cols-1 gap-3">
+        {fields.map(f => {
+          const val = values[f.field_key] || '';
+          if (f.field_type === 'textarea') {
+            return (
+              <div key={f.id} className="space-y-1.5">
+                <Label className="text-xs">{f.label}{f.required ? ' *' : ''}</Label>
+                <Textarea value={val} onChange={e => onChange(f.field_key, e.target.value)} rows={2} placeholder={f.label} />
+              </div>
+            );
+          }
+          if (f.field_type === 'select' && f.options?.length) {
+            return (
+              <div key={f.id} className="space-y-1.5">
+                <Label className="text-xs">{f.label}{f.required ? ' *' : ''}</Label>
+                <Select value={val} onValueChange={v => onChange(f.field_key, v)}>
+                  <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Choisir" /></SelectTrigger>
+                  <SelectContent>{f.options.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            );
+          }
+          return (
+            <div key={f.id} className="space-y-1.5">
+              <Label className="text-xs">{f.label}{f.required ? ' *' : ''}</Label>
+              <Input
+                type={f.field_type === 'date' ? 'date' : f.field_type === 'number' ? 'number' : 'text'}
+                value={val}
+                onChange={e => onChange(f.field_key, e.target.value)}
+                placeholder={f.label}
+              />
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
